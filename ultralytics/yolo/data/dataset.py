@@ -41,6 +41,8 @@ class YOLODataset(BaseDataset):
     ):
         self.use_segments = use_segments
         self.use_keypoints = use_keypoints
+        self.my_im_files = []
+        self.my_label_files = []
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
         super().__init__(img_path, imgsz, label_path, cache, augment, hyp, prefix, rect, batch_size, stride, pad,
                          single_cls)
@@ -99,6 +101,9 @@ class YOLODataset(BaseDataset):
 
     def get_labels(self):
         self.label_files = img2label_paths(self.im_files)
+        self.label_files = self.label_files + self.my_label_files
+        self.im_files = self.im_files + self.my_im_files
+
         cache_path = Path(self.label_files[0]).parent.with_suffix(".cache")
         try:
             cache, exists = np.load(str(cache_path), allow_pickle=True).item(), True  # load dict

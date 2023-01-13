@@ -82,16 +82,28 @@ class BaseDataset(Dataset):
                     f += glob.glob(str(p / "**" / "*.*"), recursive=True)
                     # f = list(p.rglob('*.*'))  # pathlib
                 elif p.is_file():  # file
-                    with open(p) as t:
-                        t = t.read().strip().splitlines()
-                        parent = str(p.parent) + os.sep
-                        f += [x.replace("./", parent) if x.startswith("./") else x for x in t]  # local to global path
-                        # f += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
+                    if "filelist" in str(p): # 自己的文件格式，"path/to/img\tpath/to/label"
+                        with open(p) as t:
+                            t = t.read().strip().splitlines()
+                            parent = str(p.parent) + os.sep
+                            t = [x.replace('./', parent, 2) if x.startswith('./') else x for x in t]  # to global path
+                            t = [x.split("\t") for x in t]
+                            for x, y in t:
+                                if x.split('.')[-1].lower() in IMG_FORMATS:
+                                    x = x.replace('/', os.sep)
+                                    self.my_im_files.append(x)
+                                    self.my_label_files.append(y)
+                    else:
+                        with open(p) as t:
+                            t = t.read().strip().splitlines()
+                            parent = str(p.parent) + os.sep
+                            f += [x.replace("./", parent) if x.startswith("./") else x for x in t]  # local to global path
+                            # f += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
                 else:
                     raise FileNotFoundError(f"{self.prefix}{p} does not exist")
             im_files = sorted(x.replace("/", os.sep) for x in f if x.split(".")[-1].lower() in IMG_FORMATS)
             # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
-            assert im_files, f"{self.prefix}No images found"
+            assert im_files or self.my_im_files, f"{self.prefix}No images found"
         except Exception as e:
             raise FileNotFoundError(f"{self.prefix}Error loading data from {img_path}: {e}\n{HELP_URL}") from e
         return im_files
