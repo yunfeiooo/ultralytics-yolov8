@@ -127,6 +127,11 @@ class Loss:
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets, batch_size, scale_tensor):
+        """
+        1. rescale: [0, 1] -> [0, 640](即输入图像尺寸)
+        2. bbox: xywh -> xyxy
+        3. shape: [num_targets, (1+1+4)] -> [N, max_targets, (1+4)]
+        """
         if targets.shape[0] == 0:
             out = torch.zeros(batch_size, 0, 5, device=self.device)
         else:
@@ -142,6 +147,10 @@ class Loss:
         return out
 
     def bbox_decode(self, anchor_points, pred_dist):
+        """
+        anchor_points: [num_anchors, 2]
+        pred_dist: [N, num_anchors, 4*reg_max]
+        """
         if self.use_dfl:
             b, a, c = pred_dist.shape  # batch, anchors, channels
             pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
@@ -150,34 +159,51 @@ class Loss:
         return dist2bbox(pred_dist, anchor_points, xywh=False)
 
     def __call__(self, preds, batch):
+        """
+        Args:
+        * preds: 预测 p, list, [p3, p4, p5], shape: [N, (4*reg_max + num_classes), H, W], num_classes: 不包括背景类别
+        * batch: 标注信息, dict, keys: ["img", "batch_idx", "bboxes", "cls"]
+
+        """
         loss = torch.zeros(3, device=self.device)  # box, cls, dfl
-        feats = preds[1] if isinstance(preds, tuple) else preds
+        feats = preds[1] if isinstance(preds, tuple) else preds  #  [p3, p4, p5]
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1)
 
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
-        pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous() # [N, num_anchors, nc]
+        pred_distri = pred_distri.permute(0, 2, 1).contiguous() # [N, num_anchors, 4*reg_max]
 
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
+        #  anchor_points: 每个 grid 的中心点位置, [num_anchors, 2]
+        #  stride_tensor：每个 grid 的 stride, [num_anchors,]
         anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
 
         # targets
-        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1) # [num_targets, (1+1+4)]
         targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
-        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
+        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0) # mask 是否存在 target, [N, max_targets]
 
         # pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, num_anchors, 4)
 
+        # 获取标签，采用的是 TaskAlignedAssigner
+        # target_bboxes: [b, num_anchors, 4], 每个 anchor 对应的 xyxy target
+        # target_scores: [b, num_anchors, nc], 每个 anchor 对应的分类信息, pos gt class 对应的 norm_align_metric 数值
+        # fg_mask: [b, num_anchors], 每个 anchor 是否被分配上 target（正样本）
         _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
-            pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt)
+            pred_scores.detach().sigmoid(),
+            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            anchor_points * stride_tensor,
+            gt_labels,
+            gt_bboxes,
+            mask_gt
+        )
 
-        target_bboxes /= stride_tensor
-        target_scores_sum = target_scores.sum()
+        target_bboxes /= stride_tensor              # target bbox 根据 anchor 的 stride 做 rescaling
+        target_scores_sum = target_scores.sum()     #
 
         # cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way

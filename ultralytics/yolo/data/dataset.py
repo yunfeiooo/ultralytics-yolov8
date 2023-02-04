@@ -166,11 +166,15 @@ class YOLODataset(BaseDataset):
 
     @staticmethod
     def collate_fn(batch):
+        """
+        batch: list of dict. for each: {"img": 预处理后的图像 batch, "label1": xxx, ...}
+
+        """
         # TODO: returning a dict can make thing easier and cleaner when using dataset in training
         # but I don't know if this will slow down a little bit.
         new_batch = {}
         keys = batch[0].keys()
-        values = list(zip(*[list(b.values()) for b in batch]))
+        values = list(zip(*[list(b.values()) for b in batch])) # --> [[img1, img2, ...], [masks1, masks2, ...], [keypoints1, keypoints2, ...]]
         for i, k in enumerate(keys):
             value = values[i]
             if k == "img":

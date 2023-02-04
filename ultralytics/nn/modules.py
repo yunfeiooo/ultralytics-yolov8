@@ -91,7 +91,7 @@ class DFL(nn.Module):
         self.c1 = c1
 
     def forward(self, x):
-        b, c, a = x.shape  # batch, channels, anchors
+        b, c, a = x.shape  # batch, channels, anchors # c = self.c1 * 4, self.c1 == reg_max
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
 
@@ -614,6 +614,7 @@ class Detect(nn.Module):
         super().__init__()
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
+        # 回归一个分布！ https://zhuanlan.zhihu.com/p/147691786
         self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
